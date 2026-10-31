@@ -43,6 +43,12 @@ KNOWN_CHIPS = {
     (0x0403, 0x6001): "FTDI FT232R as generic serial — typical of fake 'ELM327 Bluetooth' USB dongles",
     (0x16D0, 0x0D39): "J2534 PassThru style device id seen on Tactrix Openport clones",
     (0x16D0, 0x1094): "Tactrix/Openport 2.0 genuine-style id",
+    # ── معرّفات أجهزة المشروع المؤكدة بالاختبار المادي (انظر reports/inventory.md) ──
+    (0x04B4, 0x8613): "Cypress CY7C68013 EZ-USB FX2 — في UPA-USB V1.3 (bootloader PID 0x8613؛ firmware مخصص FX2)",
+    (0x0A89, 0x0009): "Aktiv Guardant RUSB dongle — حماية الكوبون (KTMFLASH)؛ وحدة حماية وليست واجهة برمجة",
+    (0x1A86, 0x5512): "WCH CH341A في وضع EPP/MEM/I2C (برمجة EEPROM/Flash مباشرة)",
+    (0x0403, 0xDAAD): "FGTech Galletto 4 بواجهة FTDI — FT232R أصلي أم CP210x/CH340 مقنّع؟ افحص bcdDevice: الأصلي=0x0200+",
+    (0x20A2, 0x0001): "PCM Super J2534 passthru (Emotek-family VID) — تأكد بالوصف لا باسم المنتج في Windows",
 }
 
 
@@ -82,6 +88,7 @@ def scan_sysfs():
         devs.append({
             "path": d,
             "vid": vid, "pid": pid,
+            "bcdDevice": read("bcdDevice"),
             "bDeviceClass": read("bDeviceClass"),
             "manufacturer": read("manufacturer"),
             "product": read("product"),
@@ -107,6 +114,7 @@ def dump_pyusb(vid_filter=None):
         info = {
             "vid": vid, "pid": pid,
             "bcdUSB": hex(dev.bcdUSB),
+            "bcdDevice": hex(dev.bcdDevice),
             "bDeviceClass": dev.bDeviceClass,
             "bDeviceSubClass": dev.bDeviceSubClass,
             "bDeviceProtocol": dev.bDeviceProtocol,
