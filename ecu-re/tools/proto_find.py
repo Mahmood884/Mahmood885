@@ -131,24 +131,72 @@ def probe_elm(port, seconds=5):
 
 
 # ------------------------------------------------------------ pattern -------
+def _load_records(transcript_path):
+    """Accept three formats: JSON array, JSON-lines (frida_hook output), or a
+    plain hex-dump text file. Returns list of {tx, rx} dicts."""
+    raw = open(transcript_path, encoding="utf-8", errors="replace").read().strip()
+    if not raw:
+        return []
+    # 1) single JSON document (array of objects)
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            obj = [obj]
+        return [r for r in obj if isinstance(r, dict)]
+    except json.JSONDecodeError:
+        pass
+    # 2) JSON lines — frida_hook transcript: pair out→in events by direction
+    recs, pending_out = [], None
+    is_jsonl = False
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        is_jsonl = True
+        e = ev.get("ev", "")
+        data = ev.get("data") or ev.get("input") or ""
+        if e in ("posix_write", "WriteFile", "HID_OUT", "libusb_hid_out",
+                 "send", "wsasend", "TLS_out"):
+            if pending_out is not None:
+                recs.append({"tx": pending_out, "rx": ""})
+            pending_out = data
+        elif e in ("posix_read", "ReadFile", "HID_IN", "recv", "wsarecv", "TLS_in"):
+            if pending_out is not None:
+                recs.append({"tx": pending_out, "rx": data}); pending_out = None
+            else:
+                recs.append({"tx": "", "rx": data})
+    if pending_out is not None:
+        recs.append({"tx": pending_out, "rx": ""})
+    if is_jsonl:
+        return recs
+    # 3) fallback: treat each whitespace-separated hex token as a TX blob
+    toks = [t for t in raw.replace(",", " ").split() if all(c in "0123456789abcdefABCDEF" and len(t) >= 2 for c in t)]
+    return [{"tx": t, "rx": ""} for t in toks]
+
+
 def find_patterns(transcript_path):
     """Analyze a list of TX/RX hex records for structural patterns."""
-    with open(transcript_path) as f:
-        recs = json.load(f)
+    recs = _load_records(transcript_path)
+    if not recs:
+        print("[!] لم يُعثر على أي سجلات قابلة للتحليل في الملف."); return
     tx_heads = Counter()
     tx_lens = Counter()
     rx_lens = Counter()
     for r in recs:
-        tx = binascii.unhexlify(r["tx"]) if isinstance(r.get("tx"), str) else b""
-        rx = binascii.unhexlify(r["rx"]) if isinstance(r.get("rx"), str) else b""
+        tx = binascii.unhexlify(r["tx"]) if isinstance(r.get("tx"), str) and r.get("tx") else b""
+        rx = binascii.unhexlify(r["rx"]) if isinstance(r.get("rx"), str) and r.get("rx") else b""
         if len(tx) >= 2:
             tx_heads[tx[:2]] += 1
         tx_lens[len(tx)] += 1
         rx_lens[len(rx)] += 1
     print(json.dumps({
         "messages": len(recs),
-        "tx_len_hist": dict(tx_lens),
-        "rx_len_hist": dict(rx_lens),
+        "tx_len_hist": dict(sorted(tx_lens.items())),
+        "rx_len_hist": dict(sorted(rx_lens.items())),
         "top_tx_headers": {binascii.hexlify(k).decode(): v
                            for k, v in tx_heads.most_common(12)},
     }, indent=1, ensure_ascii=False))

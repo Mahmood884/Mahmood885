@@ -13,8 +13,11 @@
 |---|---|---|
 | 1. Hardware ID | tools/usb_id.py | ✅ يعمل (مختبَر على بيئة بلا USB — fallback sysfs سليم) |
 | 2. USB/Driver RE | tools/usb_capture.py | ✅ HID raw + pcap analyzer جاهز، **يحتاج بيانات حقيقية** |
-| 3. Protocol RE | tools/proto_find.py | ✅ UDS/CAN/K-line/ELM327/pattern-ready |
-| 4. Independent SW | tools/uds_lib.py | ✅ ISO-TP+UDS كامل — test_uds.py 4/4 PASS (commit d9b0ead) |
+| 3. Protocol RE | tools/proto_find.py | ✅ UDS/CAN/K-line/ELM327/pattern-ready؛ pattern يقبل JSON-array وJSON-lines وhex-dump |
+| 3b. In-process interception | tools/frida_hook.py | ✅ **جديد ومُختبَر E2E**: اعتراض serial/HID/net/TLS/crypto داخل عملية برنامج الشركة؛ يلتقط seed/key قبل التشفير |
+| 4. Independent SW | tools/uds_lib.py | ✅ ISO-TP+UDS كامل — test_uds.py 4/4 PASS |
+
+**تبعيات frida:** `pip install frida capstone` (frida 17.x — الكود متوافق مع إزالة Module.findExportByName(null,...)).
 
 ## العنقدين الحقيقيين (لا يمكن حلها من سحابتي)
 1. **لا USB لدي** — هذه البيئة لا تملك `/dev/bus/usb`. تحديد شرائح أجهزتك يتطلب تشغيل `usb_id.py` عندك وإرسال JSON.
