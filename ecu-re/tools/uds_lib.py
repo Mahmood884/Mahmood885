@@ -42,6 +42,19 @@ class CANTransport:
         if extended:
             self.rx_id |= socket.CAN_EFF_BITMASK
             self.tx_id |= socket.CAN_EFF_BITMASK
+        # Hardware loopback OFF: we must not receive our own TX frames (vcan
+        # would echo them and break ISO-TP state machines otherwise).
+        try:
+            from socket import CAN_RAW_FILTER  # Linux >= 2.6.25 / py3.11+
+        except ImportError:
+            CAN_RAW_FILTER = 2  # SO_TIMESTAMP-style constant fallback
+        try:
+            self.sock.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_LOOPBACK, 0)
+        except OSError:
+            pass  # older kernels without vcan loopback knob — filter below saves us
+        # Kernel-side filter: only accept the ECU's rx_id frames.
+        can_filter = struct.pack("=IIII", self.rx_id, 0x7FFFFFFF, 0, 0)
+        self.sock.setsockopt(socket.SOL_CAN_RAW, CAN_RAW_FILTER, can_filter)
         self.sock.bind((iface,))
 
     def _send(self, data8):
@@ -72,33 +85,43 @@ class CANTransport:
         total = None
         deadline = time.time() + self.timeout
         expect_sn = 1
-        while time.time() < deadline:
-            raw = self.sock.recv(16)
-            can_id = struct.unpack("<I", raw[:4])[0] & 0x7FFFFFFF
-            dlc = raw[4]
-            data = raw[8:8 + dlc]
-            if can_id != self.rx_id:
-                continue
-            pci = data[0]
-            ftype = pci >> 4
-            if ftype == 0:                      # Single Frame
-                return bytes(data[1:1 + (pci & 0x0F)])
-            elif ftype == 1:                    # First Frame
-                total = ((pci & 0x0F) << 8) | data[1]
-                buf += data[2:]
-                # send Flow Control (CTS, block=0, STmin=0)
-                self._send(bytes([0x30, 0x00, 0x00]))
-            elif ftype == 2:                    # Consecutive Frame
-                sn = pci & 0x0F
-                if sn != expect_sn:
-                    raise TransportError(f"ISO-TP sequence error: got {sn}, want {expect_sn}")
-                expect_sn = (expect_sn + 1) & 0x0F
-                buf += data[1:]
-                if total and len(buf) >= total:
-                    return bytes(buf[:total])
-            elif ftype == 3:
-                pass                             # Flow control from ECU — ignore
-        raise TransportError("ISO-TP receive timeout")
+        self.sock.settimeout(max(0.05, deadline - time.time()))
+        try:
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise TransportError("ISO-TP receive timeout")
+                self.sock.settimeout(remaining)
+                try:
+                    raw = self.sock.recv(16)
+                except socket.timeout:
+                    raise TransportError("ISO-TP receive timeout")
+                can_id = struct.unpack("<I", raw[:4])[0] & 0x7FFFFFFF
+                dlc = raw[4]
+                data = raw[8:8 + dlc]
+                if can_id != self.rx_id:
+                    continue
+                pci = data[0]
+                ftype = pci >> 4
+                if ftype == 0:                      # Single Frame
+                    return bytes(data[1:1 + (pci & 0x0F)])
+                elif ftype == 1:                    # First Frame
+                    total = ((pci & 0x0F) << 8) | data[1]
+                    buf += data[2:]
+                    # send Flow Control (CTS, block=0, STmin=0)
+                    self._send(bytes([0x30, 0x00, 0x00]))
+                elif ftype == 2:                    # Consecutive Frame
+                    sn = pci & 0x0F
+                    if sn != expect_sn:
+                        raise TransportError(f"ISO-TP sequence error: got {sn}, want {expect_sn}")
+                    expect_sn = (expect_sn + 1) & 0x0F
+                    buf += data[1:]
+                    if total and len(buf) >= total:
+                        return bytes(buf[:total])
+                elif ftype == 3:
+                    pass                             # Flow control from ECU — ignore
+        finally:
+            self.sock.settimeout(None)
 
 
 # ------------------------------------------------------------------ UDS -----
@@ -145,9 +168,9 @@ class UdsClient:
 
     def read_dtc(self, mask=0xFF):
         r = self.request(0x19, 0x02, mask)
-        # r = [0x59, 0x02, availStatus] + (DTC3 + status1)*n
+        # Format ISO14230-4 (0x02): r = [0x59, 0x02] + (DTC3 + status1)*n  — no availStatus byte
         dtcs = []
-        for i in range(3, len(r) - 2, 4):
+        for i in range(2, len(r) - 2, 4):
             code = r[i:i + 3]
             dtcs.append(f"{code[0]:02X}{code[1]:02X}{code[2]:02X}")
         return dtcs
